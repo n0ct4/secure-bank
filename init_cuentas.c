@@ -23,6 +23,10 @@ void crearCuentas(){
     CuentaBancaria cuentas[] = {
         {1000, "David Sanez", 5000.00, 1234, 0},
         {1001, "Miguel Ramirez", 5000.00, 9876, 0},
+        {1002, "Lucía Ramírez", 5000.00, 4567, 0},
+        {1003, "Valeria Torres", 5000.00, 8776, 0},
+        {1004, "Julián Navarro", 5000.00, 2233, 0},
+        {1005, "Camila Duarte", 5000.00, 2233, 0}
     };
 
     size_t num_cuentas = sizeof(cuentas) / sizeof(cuentas[0]);
