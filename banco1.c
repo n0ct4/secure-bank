@@ -224,7 +224,6 @@ void *bucle_menu(void *arg)
             sleep(2);
             int cerrar_usuario = system("killall ./usuario"); // Usa system()
             int cerrar_monitor = system("killall ./monitor");
-            int cerrar_monitor2 = system("killall monitor");
             int cerrar_banco = system("killall ./banco");
             printf("Saliendo.......\n");
             registro_log_general("Main", "Salida del sistema");
