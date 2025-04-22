@@ -5,6 +5,7 @@
 #include <pthread.h>
 #include <semaphore.h>
 #include <time.h>
+#include <sys/sem.h>
 
 #include <sys/ipc.h> // Libreria parte 2
 
@@ -38,7 +39,7 @@ void *RetirarDinero(void *arg);
 void *Transferencia(void *arg);
 void *ConsultarSaldo(void *arg);
 int login();
-
+void init_semaforo();
 void print_banner();
 struct Cuenta buscar_cuenta(int numero_cuenta);
 int buscar_cuenta_log(int num_cuenta, int pin);
@@ -48,10 +49,19 @@ int inicio_sesion();
 void registro_log_general(const char *tipo, int numero_cuenta, const char *descripcion);
 
 // Variables globales para sincronización
-sem_t semaforo;
-pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER; // op criticas
-pthread_mutex_t mutex_log = PTHREAD_MUTEX_INITIALIZER; // Mutex para log de transacciones
-pthread_mutex_t mutex_log_gen = PTHREAD_MUTEX_INITIALIZER; // Mutex para application.log
+int semid;
+
+struct sembuf wait_actualizar = {0, -1, 0}; // sem 0: actualizar cuenta
+struct sembuf signal_actualizar = {0, 1, 0};
+
+struct sembuf wait_buscar = {1, -1, 0};     // sem 1: buscar cuenta
+struct sembuf signal_buscar = {1, 1, 0};
+
+struct sembuf wait_log_trans = {2, -1, 0};  // sem 2: transacciones.log
+struct sembuf signal_log_trans = {2, 1, 0};
+
+struct sembuf wait_log_gen = {3, -1, 0};    // sem 3: application.log
+struct sembuf signal_log_gen = {3, 1, 0};
 
 Config configuracion_sys; 
 
@@ -60,8 +70,8 @@ int main()
     // Cargar el config del sistema
     configuracion_sys  = leer_configuracion("config.txt");
 
-    //ACcede al segmento compartido
-
+    //Inicializacion de semaforo
+    init_semaforo();
 
     int cuenta_id = 0;
 
@@ -76,6 +86,7 @@ int main()
 
     int opcion = 0;
 
+    int hilo_creado = 0;
     // Menu principal
     while (opcion != 5)
     {
@@ -94,10 +105,12 @@ int main()
         case 1:
             // Depositar Dinero
             pthread_create(&hilo, NULL, DepositarDinero, &cuentaUsuario);
+            hilo_creado = 1;
             break;
         case 2:
             // Retirar Dinero
             pthread_create(&hilo, NULL, RetirarDinero, &cuentaUsuario);
+            hilo_creado = 1;
             break;
         case 3:
             // Transferencia
@@ -112,33 +125,62 @@ int main()
             scanf("%f", &data->cantidad);
 
             pthread_create(&hilo, NULL, Transferencia, data);
+            hilo_creado = 1;
             break;
         case 4:
             // Consultar Saldo
             pthread_create(&hilo, NULL, ConsultarSaldo, &cuentaUsuario);
+            hilo_creado = 1;
             break;
         case 5:
             //Salir
             printf("Saliendo.......\n");
             break;
         default:
-            system("clear");
             printf("Introduzca una opción válida por favor\n");
             break;
         };
         
-        pthread_join(hilo, NULL); // Esperar a que el hilo termine
+        if (hilo_creado){
+            pthread_join(hilo, NULL); // Esperar a que el hilo termine
+        } else {
+            printf("Introduzca una opcion valida.\n");
+        }
         system("clear"); // Limpiar pantalla
     };
 
     // Limpieza de recursos
-    sem_destroy(&semaforo);
+    //sem_destroy(&semaforo);
     return 0;
 };
 
+// ===============================================================
+void init_semaforo(){
+    key_t key = ftok("config.txt", 'E');
+    // semaforo: buscar cuentas | semaforo 2: log transacciones |
+    if (key == -1){
+        perror("Error al generar la clave");
+        exit(1);
+    }
+
+    semid = semget(key, 4, IPC_CREAT | 0666);
+    if (semid == -1){
+        perror("error al crear los semaforos");
+        exit(1);
+
+    }
+
+    for(int i = 0; i < 4; i++){
+        semctl(semid, i, SETVAL, 1);
+    }
+
+
+};
+// ===============================================================
+
 // Inicio de sesion
 int inicio_sesion(){
-    sem_init(&semaforo, 1, 1); // Inicializacion de semaforo
+    //sem_init(&semaforo, 1, 1); // Inicializacion de semaforo
     int opcion1 = 0;
     int cuenta_id = 0;
 
@@ -208,13 +250,15 @@ int login()
 // Registro de transacciones en transacciones.log
 void registrar_transaccion(const char *tipo, int numero_cuenta, float monto, float saldo_final)
 {
-    pthread_mutex_lock(&mutex_log);
+    //printf("Esperando semaforo\n");
+    semop(semid, &wait_log_trans, 1);
+    //printf("entrando a la seccion critica TRANSACCION\n");
 
     FILE *log = fopen("transacciones.log", "a");
     if (!log)
     {
         perror("Error al abrir transacciones.log");
-        pthread_mutex_unlock(&mutex_log);
+        semop(semid, &signal_log_trans, 1);
         return;
     }
 
@@ -229,18 +273,21 @@ void registrar_transaccion(const char *tipo, int numero_cuenta, float monto, flo
             fecha_hora, numero_cuenta, tipo, monto, saldo_final);
 
     fclose(log);
-    pthread_mutex_unlock(&mutex_log);
+    semop(semid, &signal_log_trans, 1);
+    //printf("Saliendo de la seccion critica TRANSACCION");
 }
 
 // Registro de eventos generales del sistema en application.log
 void registro_log_general(const char *tipo, int numero_cuenta, const char *descripcion){
-    pthread_mutex_lock(&mutex_log_gen);
+   
+    semop(semid, &wait_log_gen, 1);
+    
 
     FILE *log_gen = fopen("application.log", "a");
     if (!log_gen)
     {
         perror("Error al abrir application.log");
-        pthread_mutex_unlock(&mutex_log_gen);
+        semop(semid, &signal_log_gen, 1);
         return;
     }
 
@@ -255,13 +302,17 @@ void registro_log_general(const char *tipo, int numero_cuenta, const char *descr
             fecha_hora, numero_cuenta, tipo, descripcion );
 
     fclose(log_gen);
-    pthread_mutex_unlock(&mutex_log_gen);
+    semop(semid, &signal_log_gen, 1);
+
 }
 
 // Función para actualizar el saldo en cuentas.dat
 void actualizar_cuenta(struct Cuenta *cuenta)
 {
-    sem_wait(&semaforo);
+    //printf("Esperando semaforo\n");
+    semop(semid, &wait_actualizar, 1);
+    //printf("Entrando a la seccion critica ACT CUENTA\n");
+    
     FILE *archivo = fopen(CUENTAS, "rb+");
     struct Cuenta temp;
 
@@ -279,7 +330,9 @@ void actualizar_cuenta(struct Cuenta *cuenta)
 
     fclose(archivo);
     // libera semaforo
-    sem_post(&semaforo); 
+    //sleep(10);
+    semop(semid, &signal_actualizar, 1);
+    //printf("Saliendo de la seccion critica ACT CUENTA\n");
 }
 
 // Función para retirar dinero
@@ -292,7 +345,6 @@ void *RetirarDinero(void *arg)
     printf("Solo puede retirar un monto maximo de: (%d)\n", configuracion_sys.limite_retiro);
     scanf("%f", &cantidad_retirar);
 
-    pthread_mutex_lock(&mutex);
     if (cantidad_retirar > cuenta->saldo)
     {
         printf("Fondos insuficientes.\n");
@@ -314,7 +366,6 @@ void *RetirarDinero(void *arg)
         registro_log_general("Retiro", cuenta->numero_cuenta, "Usuario ha realizado un retiro");
         printf("Retiro realizado. Nuevo saldo: %.2f\n", cuenta->saldo);
     }
-    pthread_mutex_unlock(&mutex);
     sleep(5);
 
     return NULL;
@@ -329,13 +380,11 @@ void *DepositarDinero(void *arg)
     printf("¿Cuánto dinero quiere depositar?\n");
     scanf("%f", &cantidad_depositar);
 
-    pthread_mutex_lock(&mutex);
 
     // Realiza el deposito
     cuenta->saldo += cantidad_depositar;
     cuenta->num_transacciones++;
     actualizar_cuenta(cuenta);
-    pthread_mutex_unlock(&mutex);
 
     // Registros
     registrar_transaccion("Depósito", cuenta->numero_cuenta, cantidad_depositar, cuenta->saldo);
@@ -359,14 +408,11 @@ void *Transferencia(void *arg)
     // Buscar la cuenta destino
     struct Cuenta cuenta_destino = buscar_cuenta(data->num_cuenta_destino);
 
-    pthread_mutex_lock(&mutex);
-
     // Verificar fondos suficientes en la cuenta origen
     if (cantidad > cuenta_origen->saldo)
     {
         printf("Fondos insuficientes para la transferencia.\n");
         registro_log_general("Transferencia fallida", cuenta_origen->numero_cuenta, "Rechazada por fondos insuficientes");
-        pthread_mutex_unlock(&mutex);
         sleep(5);
         return NULL;
     }
@@ -375,7 +421,6 @@ void *Transferencia(void *arg)
     if (data->cantidad > config->limite_tranferencia){
         printf("El monto excede el limite para transferencias (%d)\n", config->limite_tranferencia);
         registro_log_general("Transferencia fallida", cuenta_origen->numero_cuenta, "Rechazada tras exceder limite");
-        pthread_mutex_unlock(&mutex);
         sleep(5);
         return NULL;
     }
@@ -398,15 +443,11 @@ void *Transferencia(void *arg)
     printf("Transferencia realizada. Nuevo saldo: %.2f\n", cuenta_origen->saldo);
     sleep(5);
 
-    pthread_mutex_unlock(&mutex);
     return NULL;
 }
 
 void *ConsultarSaldo(void *arg) {
     struct Cuenta *cuenta_local = (struct Cuenta *)arg;
-    
-    // Bloquear el mutex para evitar condiciones de carrera
-    pthread_mutex_lock(&mutex);
     
     // Buscar la cuenta actualizada en el archivo
     struct Cuenta cuenta_actualizada = buscar_cuenta(cuenta_local->numero_cuenta);
@@ -418,10 +459,7 @@ void *ConsultarSaldo(void *arg) {
     printf("Transacciones realizadas: %d\n", cuenta_actualizada.num_transacciones);
     
     printf("========================================\n");
-    
-    
-    pthread_mutex_unlock(&mutex);
-    
+        
     sleep(5); // Tiempo para que el usuario pueda leer la información
     return NULL;
 }
@@ -429,7 +467,10 @@ void *ConsultarSaldo(void *arg) {
 // Buscar una cuenta en el archivo
 struct Cuenta buscar_cuenta(int numero_cuenta)
 {
-    sem_wait(&semaforo);
+    //printf("Esperando semaforo\n");
+    semop(semid, &wait_buscar, 1);
+    //printf("Entrando a la zona critica BUSC CUENTA\n");
+    //sleep(10);
     FILE *archivo = fopen(CUENTAS, "rb");
 
     // Definimos una cuenta vacia 
@@ -439,7 +480,10 @@ struct Cuenta buscar_cuenta(int numero_cuenta)
     {
         perror("Error al abrir cuentas.dat");
         registro_log_general("Busqueda_cuenta", numero_cuenta, "Busqueda fallida, archivo de cuentas inexistente");
-        sem_post(&semaforo);
+
+        semop(semid, &signal_buscar, 1);
+
+        
         return cuenta_aux;
     }
 
@@ -450,13 +494,15 @@ struct Cuenta buscar_cuenta(int numero_cuenta)
         {
             fclose(archivo);
             registro_log_general("buscar_cuenta", numero_cuenta, "Cuenta encontrada");
-            sem_post(&semaforo);
+            semop(semid, &signal_buscar, 1);
             return cuenta_aux;
         }
     }
 
     fclose(archivo);
-    sem_post(&semaforo);
+    semop(semid, &signal_buscar, 1);
+    //printf("Saliendo de la seccion critica BUSC CUENTA");
+
     return cuenta_aux;
 }
 
@@ -470,7 +516,7 @@ int buscar_cuenta_log(int num_cuenta, int pin)
     {
         perror("Error al abrir el archivo cuentas.dat");
         registro_log_general("busqueda_cuenta_log", num_cuenta, "Error al abrir el archivo cuentas.dat");
-        sem_post(&semaforo);
+        
 
         return -1; 
     }
