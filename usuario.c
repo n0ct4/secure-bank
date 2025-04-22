@@ -6,6 +6,8 @@
 #include <semaphore.h>
 #include <time.h>
 
+#include <sys/ipc.h> // Libreria parte 2
+
 #include "config.h"
 
 #define CUENTAS "cuentas.dat"
@@ -19,6 +21,7 @@ struct Cuenta
     int pin;
     int num_transacciones;
 };
+
 
 // Estructura para manejar la transferencia con hilos
 struct TransferData
@@ -56,6 +59,10 @@ int main()
 {
     // Cargar el config del sistema
     configuracion_sys  = leer_configuracion("config.txt");
+
+    //ACcede al segmento compartido
+
+
     int cuenta_id = 0;
 
     print_banner();
@@ -395,14 +402,27 @@ void *Transferencia(void *arg)
     return NULL;
 }
 
-void *ConsultarSaldo(void *arg)
-{
-    struct Cuenta *cuenta = (struct Cuenta *)arg;
-    printf("Titular: %s\n", cuenta->titular);
-    printf("Número de cuenta: %d\n", cuenta->numero_cuenta);
-    printf("Saldo actual: %.2f\n", cuenta->saldo);
-    printf("Transacciones realizadas: %d\n", cuenta->num_transacciones);
-    sleep(5);
+void *ConsultarSaldo(void *arg) {
+    struct Cuenta *cuenta_local = (struct Cuenta *)arg;
+    
+    // Bloquear el mutex para evitar condiciones de carrera
+    pthread_mutex_lock(&mutex);
+    
+    // Buscar la cuenta actualizada en el archivo
+    struct Cuenta cuenta_actualizada = buscar_cuenta(cuenta_local->numero_cuenta);
+    
+    // Mostrar la información actualizada
+    printf("Titular: %s\n", cuenta_actualizada.titular);
+    printf("Número de cuenta: %d\n", cuenta_actualizada.numero_cuenta);
+    printf("Saldo actual: %.2f\n", cuenta_actualizada.saldo);
+    printf("Transacciones realizadas: %d\n", cuenta_actualizada.num_transacciones);
+    
+    printf("========================================\n");
+    
+    
+    pthread_mutex_unlock(&mutex);
+    
+    sleep(5); // Tiempo para que el usuario pueda leer la información
     return NULL;
 }
 
