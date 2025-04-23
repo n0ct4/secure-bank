@@ -63,6 +63,9 @@ struct sembuf signal_log_trans = {2, 1, 0};
 struct sembuf wait_log_gen = {3, -1, 0};    // sem 3: application.log
 struct sembuf signal_log_gen = {3, 1, 0};
 
+struct sembuf wait_transferencia = {4, -1, 0}; // sem 4: tranferencia
+struct sembuf signal_transferencia = {4, 1, 0}; 
+
 Config configuracion_sys; 
 
 int main()
@@ -163,17 +166,16 @@ void init_semaforo(){
         exit(1);
     }
 
-    semid = semget(key, 4, IPC_CREAT | 0666);
+    semid = semget(key, 5, IPC_CREAT | 0666);
     if (semid == -1){
         perror("error al crear los semaforos");
         exit(1);
 
     }
 
-    for(int i = 0; i < 4; i++){
+    for(int i = 0; i < 5; i++){
         semctl(semid, i, SETVAL, 1);
     }
-
 
 };
 // ===============================================================
@@ -404,6 +406,9 @@ void *Transferencia(void *arg)
     int num_cuenta_destino = data->num_cuenta_destino;
     float cantidad = data->cantidad;
 
+    //printf("Esperando sem\n");
+    semop(semid, &wait_transferencia, 1); // Entrada a seccion critica 
+    //printf("Entrado a seccion critica transferencia\n");
     
     // Buscar la cuenta destino
     struct Cuenta cuenta_destino = buscar_cuenta(data->num_cuenta_destino);
@@ -414,6 +419,10 @@ void *Transferencia(void *arg)
         printf("Fondos insuficientes para la transferencia.\n");
         registro_log_general("Transferencia fallida", cuenta_origen->numero_cuenta, "Rechazada por fondos insuficientes");
         sleep(5);
+
+        semop(semid, &signal_transferencia, 1); // Liberar sem
+        //printf("saliendo de seccion critica\n");
+
         return NULL;
     }
 
@@ -422,12 +431,17 @@ void *Transferencia(void *arg)
         printf("El monto excede el limite para transferencias (%d)\n", config->limite_tranferencia);
         registro_log_general("Transferencia fallida", cuenta_origen->numero_cuenta, "Rechazada tras exceder limite");
         sleep(5);
+
+        semop(semid, &signal_transferencia, 1); // Liberar sem
+        //printf("saliendo de seccion critica\n");
+
         return NULL;
     }
 
     // Realizar la transferencia
     cuenta_origen->saldo -= cantidad;
     cuenta_destino.saldo += cantidad;
+    cuenta_origen->num_transacciones++; // Actualizar contador de operaciones
 
     // Actualizar ambas cuentas en el archivo
     actualizar_cuenta(cuenta_origen);
@@ -441,7 +455,10 @@ void *Transferencia(void *arg)
 
 
     printf("Transferencia realizada. Nuevo saldo: %.2f\n", cuenta_origen->saldo);
-    sleep(5);
+    sleep(5); // Sleep(10) para combrobacion de semaforo
+
+    semop(semid, &signal_transferencia, 1);
+    //printf("Saliendo de la seccion critica tranferencia\n");
 
     return NULL;
 }
