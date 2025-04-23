@@ -231,7 +231,7 @@ void *bucle_menu(void *arg)
             break;
 
         default:
-            printf("Introduzca un valor valido.");
+            printf("Introduzca un valor valido.\n");
             registro_log_general("Main", "Error de usuario opcion del menu");
             break;
         }   
